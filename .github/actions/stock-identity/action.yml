@@ -1,0 +1,97 @@
+name: 'Stock Kernel Identity'
+description: >-
+  Rewrites the kernel release string and the UTS build timestamp so the build
+  reports the exact string of a real stock device build. After this step,
+  uname(2), /proc/version, /proc/sys/kernel/version and the linux_banner all
+  say the stock values, so no runtime (SUSFS) spoof is needed.
+inputs:
+  enabled:
+    description: 'Enable the rewrite (false = leave the build untouched)'
+    required: false
+    default: 'true'
+  uts_release:
+    description: 'Full stock UTS_RELEASE to report, e.g. 5.10.168-android12-9-00003-g828a3b1f7462-ab10564101'
+    required: false
+    default: '5.10.168-android12-9-00003-g828a3b1f7462-ab10564101'
+  build_timestamp:
+    description: 'Stock UTS build timestamp (UTS_VERSION date)'
+    required: false
+    default: 'Wed Jul 26 12:50:50 UTC 2023'
+  set_sublevel:
+    description: 'Also rewrite VERSION/PATCHLEVEL/SUBLEVEL in the kernel Makefile to the base version (recommended)'
+    required: false
+    default: 'true'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Rewrite UTS release and build stamp
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        ENABLED: ${{ inputs.enabled }}
+        UTS: ${{ inputs.uts_release }}
+        TS: ${{ inputs.build_timestamp }}
+        SET_SUBLEVEL: ${{ inputs.set_sublevel }}
+      run: |
+        set -euo pipefail
+
+        if [ "${ENABLED}" != "true" ]; then
+          echo "[*] stock-identity: disabled"
+          exit 0
+        fi
+
+        [ -f Makefile ] || { echo "ERROR: kernel/common/Makefile not found" >&2; exit 1; }
+        [ -f scripts/setlocalversion ] || { echo "ERROR: scripts/setlocalversion not found" >&2; exit 1; }
+
+        if [ -z "${UTS}" ]; then
+          echo "[*] stock-identity: empty uts_release, skipping"
+          exit 0
+        fi
+
+        # 5.10.168-android12-9-00003-g828a3b1f7462-ab10564101
+        #   BASE   = 5.10.168
+        #   SUFFIX = -android12-9-00003-g828a3b1f7462-ab10564101
+        BASE="${UTS%%-*}"
+        SUFFIX="-${UTS#*-}"
+        MAJ="${BASE%%.*}"
+        REST="${BASE#*.}"
+        MIN="${REST%%.*}"
+        SUB="${REST#*.}"
+
+        if [ "${SET_SUBLEVEL}" = "true" ]; then
+          sed -i -E "s/^VERSION[[:space:]]*=.*/VERSION = ${MAJ}/" Makefile
+          sed -i -E "s/^PATCHLEVEL[[:space:]]*=.*/PATCHLEVEL = ${MIN}/" Makefile
+          sed -i -E "s/^SUBLEVEL[[:space:]]*=.*/SUBLEVEL = ${SUB}/" Makefile
+        fi
+
+        # setlocalversion is what feeds UTS_RELEASE (KERNELVERSION + suffix).
+        # Replacing the whole script is deterministic and immune to the
+        # git-describe / KMI logic used by the build.
+        [ -f scripts/setlocalversion.orig ] || cp scripts/setlocalversion scripts/setlocalversion.orig
+        cat > scripts/setlocalversion <<EOF
+        #!/bin/sh
+        # stock-identity: force a stock release suffix (source of UTS_RELEASE)
+        printf '%s\n' "${SUFFIX}"
+        exit 0
+        EOF
+        chmod +x scripts/setlocalversion
+
+        # UTS_VERSION is "#N <timestamp>" where N comes from .version. A stale
+        # .version (cached out/ dir) would produce #2, #3 ... instead of #1.
+        find . -maxdepth 4 -name .version -not -path './.git/*' -delete 2>/dev/null || true
+        find out -maxdepth 5 -name .version -delete 2>/dev/null || true
+
+        EPOCH="$(date -u -d "${TS}" +%s)"
+
+        {
+          echo "KBUILD_BUILD_TIMESTAMP=${TS}"
+          echo "SOURCE_DATE_EPOCH=${EPOCH}"
+          echo "STOCK_UTS_RELEASE=${UTS}"
+        } >> "$GITHUB_ENV"
+
+        echo "[+] stock-identity: UTS_RELEASE=${UTS}"
+        echo "[+] stock-identity: UTS_VERSION date=${TS} (epoch ${EPOCH})"
+        echo "[+] stock-identity: Makefile base=${BASE}"
+        grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL)[[:space:]]*=' Makefile | sed 's/^/    /'
+        tail -n 4 scripts/setlocalversion | sed 's/^/    /'

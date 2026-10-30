@@ -12,20 +12,32 @@ IMG="${2:-}"
 
 find_image() {
   local c
+  # 1) build.sh (legacy GKI) writes to $OUT_DIR (default /home/runner/out)
   for c in \
-    kernel/common/out/android*/common/arch/arm64/boot/Image \
+    "${OUT_DIR:-}/dist/Image" \
+    "$HOME/out/dist/Image" \
+    "/home/runner/out/dist/Image" \
+    "out/dist/Image" \
+    "$HOME/out/common/arch/arm64/boot/Image" \
+    "out/common/arch/arm64/boot/Image" \
+    kernel/common/out/*/dist/Image \
     kernel/common/out/*/common/arch/arm64/boot/Image \
     kernel/out/*/common/arch/arm64/boot/Image \
     kernel/common/arch/arm64/boot/Image; do
     [ -f "$c" ] && { printf '%s\n' "$c"; return 0; }
   done
-  c="$(find kernel -type f -name Image 2>/dev/null | head -n 1 || true)"
-  [ -n "$c" ] && { printf '%s\n' "$c"; return 0; }
+  # 2) fallback: any Image under the build dirs
+  for d in "$HOME/out" out kernel; do
+    [ -d "$d" ] || continue
+    c="$(find "$d" -type f -name Image 2>/dev/null | head -n 1 || true)"
+    [ -n "$c" ] && { printf '%s\n' "$c"; return 0; }
+  done
   return 1
 }
 
+
 if [ -z "$IMG" ]; then
-  IMG="$(find_image)" || { echo "ERROR: built Image not found" >&2; exit 1; }
+  IMG="$(find_image)" || { echo "ERROR: built Image not found (procurei $OUT_DIR/dist, $HOME/out/dist, kernel/**/Image)" >&2; exit 1; }
 fi
 [ -f "$IMG" ] || { echo "ERROR: image not found: $IMG" >&2; exit 1; }
 

@@ -209,7 +209,14 @@ jobs:
           else
             OS_PATCH_LEVEL_YM="$OS_PATCH_LEVEL_INPUT"
           fi
-          FIXED_BUILD_DATE="${OS_PATCH_LEVEL_YM}-05 04:20:00 UTC"
+          STOCK_TS="${{ inputs.stock_build_timestamp }}"
+          if [ -n "$STOCK_TS" ] && [ "${{ inputs.stock_identity }}" = "true" ]; then
+            # stock-identity: use the real device build timestamp instead of the
+            # synthetic "<patch>-05 04:20 UTC" date.
+            FIXED_BUILD_DATE="$STOCK_TS"
+          else
+            FIXED_BUILD_DATE="${OS_PATCH_LEVEL_YM}-05 04:20:00 UTC"
+          fi
           SOURCE_DATE_EPOCH=$(date -u -d "$FIXED_BUILD_DATE" +%s)
           echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> $GITHUB_ENV
           KBUILD_TS=$(date -u -d @${SOURCE_DATE_EPOCH} '+%a %b %d %H:%M:%S UTC %Y')
